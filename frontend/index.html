@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL Shortener</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; background: #0f0f0f; color: #e0e0e0; }
+    h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+    p.sub { color: #888; margin-bottom: 2rem; }
+    input, button { width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid #333; margin-bottom: 0.75rem; font-size: 1rem; }
+    input { background: #1a1a1a; color: #e0e0e0; }
+    button { background: #4f8ef7; color: #fff; border: none; cursor: pointer; font-weight: 600; }
+    button:hover { background: #3a7de0; }
+    #result { margin-top: 1.5rem; background: #1a1a1a; padding: 1rem; border-radius: 6px; word-break: break-all; display: none; }
+    #result a { color: #4f8ef7; }
+    .error { color: #f74f4f; }
+  </style>
+</head>
+<body>
+  <h1>⚡ URL Shortener</h1>
+  <p class="sub">Fast, distributed, built for scale.</p>
+
+  <input id="url" type="url" placeholder="https://example.com/very/long/url" />
+  <input id="alias" type="text" placeholder="Custom alias (optional)" />
+  <input id="ttl" type="number" placeholder="Expires in days (optional)" min="1" />
+  <button onclick="shorten()">Shorten</button>
+
+  <div id="result"></div>
+
+  <script>
+    async function shorten() {
+      const url = document.getElementById('url').value.trim();
+      const alias = document.getElementById('alias').value.trim();
+      const ttl = document.getElementById('ttl').value.trim();
+      const resultEl = document.getElementById('result');
+
+      if (!url) { showResult('Please enter a URL.', true); return; }
+
+      const body = { url };
+      if (alias) body.alias = alias;
+      if (ttl) body.ttl_days = parseInt(ttl, 10);
+
+      try {
+        const res = await fetch('/shorten', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) { showResult(data.error || 'Something went wrong.', true); return; }
+        showResult(`<a href="${data.short_url}" target="_blank">${data.short_url}</a>${data.expires_at ? `<br/><small>Expires: ${new Date(data.expires_at).toLocaleString()}</small>` : ''}`);
+      } catch (e) {
+        showResult('Network error. Is the server running?', true);
+      }
+    }
+
+    function showResult(html, isError = false) {
+      const el = document.getElementById('result');
+      el.style.display = 'block';
+      el.innerHTML = isError ? `<span class="error">${html}</span>` : html;
+    }
+  </script>
+</body>
+</html>
