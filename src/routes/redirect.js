@@ -1,22 +1,29 @@
-'use strict';
+"use strict";
 
-const express = require('express');
-const { resolveCode } = require('../services/shortener');
+const express = require("express");
+const { resolveCode } = require("../services/shortener");
+const producer = require("../kafka/producer");
 
 const router = express.Router();
 
-router.get('/:code', async (req, res, next) => {
+router.get("/:code", async (req, res, next) => {
   try {
     const { code } = req.params;
     const record = await resolveCode(code);
 
     if (!record) {
-      return res.status(404).json({ error: 'Short URL not found' });
+      return res.status(404).json({ error: "Short URL not found" });
     }
 
     if (record.expires_at && new Date() > new Date(record.expires_at)) {
-      return res.status(410).json({ error: 'This short URL has expired' });
+      return res.status(410).json({ error: "This short URL has expired" });
     }
+
+    // Fire-and-forget: emit click event without blocking the redirect.
+    // A Kafka failure must never affect redirect latency or reliability.
+    producer.emitClickEvent(code, req).catch((err) => {
+      console.error("[Analytics] Failed to emit click event:", err.message);
+    });
 
     return res.redirect(301, record.long_url);
   } catch (err) {

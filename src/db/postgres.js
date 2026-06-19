@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const { Pool } = require('pg');
+const { Pool } = require("pg");
 
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
 });
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error:', err.message);
+pool.on("error", (err) => {
+  console.error("Unexpected PostgreSQL client error:", err.message);
 });
 
 async function query(text, params) {
@@ -31,7 +31,17 @@ async function initSchema() {
       expires_at TIMESTAMP
     );
   `);
-  console.log('Database schema initialised');
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS click_stats (
+      short_code VARCHAR(12) NOT NULL,
+      date DATE NOT NULL,
+      click_count INT DEFAULT 0,
+      PRIMARY KEY (short_code, date)
+    );
+  `);
+
+  console.log("Database schema initialised");
 }
 
 module.exports = { query, initSchema };
