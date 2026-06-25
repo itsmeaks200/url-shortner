@@ -1,6 +1,6 @@
 # Distributed URL Shortener
 
-A production-grade URL shortener built with Node.js, Express, PostgreSQL, Redis, and Kafka. Designed as a portfolio project targeting FAANG SWE intern and systems engineering interviews — every component and design decision is explainable at a whiteboard.
+A production-grade URL shortener built with Node.js, Express, PostgreSQL, Redis, and Kafka. 
 
 ## Architecture
 
