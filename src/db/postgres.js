@@ -24,7 +24,7 @@ async function initSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS urls (
       id BIGINT PRIMARY KEY,
-      short_code VARCHAR(12) UNIQUE NOT NULL,
+      short_code VARCHAR(50) UNIQUE NOT NULL,
       long_url TEXT NOT NULL,
       custom_alias VARCHAR(50),
       created_at TIMESTAMP DEFAULT NOW(),
@@ -34,7 +34,7 @@ async function initSchema() {
 
   await query(`
     CREATE TABLE IF NOT EXISTS click_stats (
-      short_code VARCHAR(12) NOT NULL,
+      short_code VARCHAR(50) NOT NULL,
       date DATE NOT NULL,
       click_count INT DEFAULT 0,
       PRIMARY KEY (short_code, date)

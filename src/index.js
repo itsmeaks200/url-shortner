@@ -26,16 +26,27 @@ app.use(errorHandler);
 
 // Guard prevents the server from starting when the module is required by tests
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`URL Shortener running on port ${PORT}`);
-  });
+  const { initSchema } = require("./db/postgres");
 
-  // Start Kafka consumer in the background.
-  // A Kafka outage must not prevent the server from starting.
-  require("./kafka/consumer")
-    .start()
+  // Initialise DB schema before accepting traffic, then start everything else.
+  // initSchema uses IF NOT EXISTS so it is safe to run on every boot.
+  initSchema()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`URL Shortener running on port ${PORT}`);
+      });
+
+      // Start Kafka consumer in the background.
+      // A Kafka outage must not prevent the server from starting.
+      require("./kafka/consumer")
+        .start()
+        .catch((err) => {
+          console.error("[Kafka] Consumer failed to start:", err.message);
+        });
+    })
     .catch((err) => {
-      console.error("[Kafka] Consumer failed to start:", err.message);
+      console.error("[Startup] Schema initialisation failed:", err.message);
+      process.exit(1);
     });
 }
 

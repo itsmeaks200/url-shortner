@@ -2,9 +2,13 @@
 
 const Redis = require('ioredis');
 
+// Connect eagerly and allow the offline queue so the rate‑limiter can issue
+// commands during container start‑up. The queue will be flushed once the
+// connection is established; if Redis never becomes reachable the errors are
+// handled by the `error` listener and the request flow continues (fail‑open).
 const client = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  lazyConnect: true,        // don't connect until first command
-  enableOfflineQueue: false, // fail fast if Redis is down — never block redirects
+  lazyConnect: false,       // connect immediately on module load
+  enableOfflineQueue: true, // buffer commands until the connection is ready
   maxRetriesPerRequest: 1,
 });
 
