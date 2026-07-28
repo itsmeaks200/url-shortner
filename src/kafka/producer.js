@@ -20,6 +20,17 @@ async function connect() {
   }
 }
 
+async function sendToTopic(topic, payload) {
+  await connect();
+
+  const value = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+  await producer.send({
+    topic,
+    messages: [{ value }],
+  });
+}
+
 /**
  * Emit a click event to the `click-events` topic.
  * Raw IPs are never stored — only a SHA-256 hash.
@@ -28,12 +39,11 @@ async function connect() {
  * @param {import('express').Request} req
  */
 async function emitClickEvent(shortCode, req) {
-  await connect();
-
   const rawIp = req.ip || req.socket.remoteAddress || 'unknown';
   const ipHash = crypto.createHash('sha256').update(rawIp).digest('hex');
 
   const event = {
+    event_id: crypto.randomUUID(),
     short_code: shortCode,
     timestamp: new Date().toISOString(),
     ip_hash: ipHash,
@@ -41,10 +51,7 @@ async function emitClickEvent(shortCode, req) {
     referrer: req.headers.referer || req.headers.referrer || '',
   };
 
-  await producer.send({
-    topic: 'click-events',
-    messages: [{ value: JSON.stringify(event) }],
-  });
+  await sendToTopic('click-events', event);
 }
 
 async function disconnect() {
@@ -54,4 +61,4 @@ async function disconnect() {
   }
 }
 
-module.exports = { emitClickEvent, disconnect };
+module.exports = { emitClickEvent, disconnect, sendToTopic };

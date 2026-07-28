@@ -15,9 +15,9 @@ function isValidUrl(str) {
   }
 }
 
-// Validate custom alias: 3–50 chars, alphanumeric + hyphens
+// Validate custom alias: reserve generated-code space by capping aliases below 10 chars.
 function isValidAlias(str) {
-  return /^[a-zA-Z0-9-]{3,50}$/.test(str);
+  return /^[a-zA-Z0-9-]{3,9}$/.test(str);
 }
 
 router.post('/', async (req, res, next) => {
@@ -30,8 +30,16 @@ router.post('/', async (req, res, next) => {
 
     if (alias && !isValidAlias(alias)) {
       return res.status(400).json({
-        error: 'Alias must be 3–50 characters: letters, numbers, or hyphens only',
+        error: 'Alias must be 3–9 characters: letters, numbers, or hyphens only',
       });
+    }
+
+    if (ttlDays !== undefined) {
+      if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 3650) {
+        return res.status(400).json({
+          error: 'ttl_days must be an integer between 1 and 3650',
+        });
+      }
     }
 
     const { shortCode, expiresAt } = await shortenUrl({ url, alias, ttlDays });
@@ -43,8 +51,8 @@ router.post('/', async (req, res, next) => {
       expires_at: expiresAt ? expiresAt.toISOString() : null,
     });
   } catch (err) {
-    // Unique constraint violation — alias already taken
-    if (err.code === '23505') {
+    // Only the short_code constraint maps to a user-facing alias collision.
+    if (err.code === '23505' && err.constraint === 'urls_short_code_key') {
       return res.status(409).json({ error: 'Alias already taken' });
     }
     next(err);

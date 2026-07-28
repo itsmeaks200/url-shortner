@@ -25,7 +25,8 @@ router.get("/:code", async (req, res, next) => {
       console.error("[Analytics] Failed to emit click event:", err.message);
     });
 
-    return res.redirect(301, record.long_url);
+    res.set("Cache-Control", "no-store, max-age=0");
+    return res.redirect(302, record.long_url);
   } catch (err) {
     next(err);
   }

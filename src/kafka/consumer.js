@@ -2,6 +2,7 @@
 
 const { Kafka } = require('kafkajs');
 const { query } = require('../db/postgres');
+const { sendToTopic } = require('./producer');
 
 const kafka = new Kafka({
   clientId: 'url-shortener-consumer',
@@ -19,34 +20,83 @@ async function start() {
   await consumer.subscribe({ topic: 'click-events', fromBeginning: false });
 
   await consumer.run({
-    // Manual offset commit: only advance the offset after the DB write succeeds.
-    // If the consumer crashes between the write and the commit, the message is
-    // re-processed. The upsert is idempotent so this at-least-once behaviour is safe.
+    // Manual offset commit: only advance the offset after the event is durably recorded.
     autoCommit: false,
-    eachMessage: async ({ topic, partition, message }) => {
-      try {
-        const event = JSON.parse(message.value.toString());
-        const date = event.timestamp.split('T')[0]; // YYYY-MM-DD
+    eachBatch: async ({ batch, resolveOffset, commitOffsetsIfNecessary, heartbeat, isRunning, isStale }) => {
+      for (const message of batch.messages) {
+        if (!isRunning() || isStale()) {
+          return;
+        }
 
-        await query(
-          `INSERT INTO click_stats (short_code, date, click_count)
-           VALUES ($1, $2, 1)
-           ON CONFLICT (short_code, date)
-           DO UPDATE SET click_count = click_stats.click_count + 1`,
-          [event.short_code, date],
-        );
+        try {
+          const event = JSON.parse(message.value.toString());
 
-        // Commit next offset only after the DB write succeeds
-        await consumer.commitOffsets([
-          {
-            topic,
-            partition,
-            offset: (BigInt(message.offset) + 1n).toString(),
-          },
-        ]);
-      } catch (err) {
-        // Log and skip — do NOT commit the offset so the message is retried on restart
-        console.error('[Kafka Consumer] Failed to process message:', err.message);
+          if (!event.event_id || !event.short_code || !event.timestamp) {
+            throw new Error('Malformed click event');
+          }
+
+          const clickedAt = new Date(event.timestamp);
+          if (Number.isNaN(clickedAt.getTime())) {
+            throw new Error('Invalid click event timestamp');
+          }
+
+          const inserted = await query(
+            `INSERT INTO click_events (event_id, short_code, clicked_at, ip_hash, user_agent, referrer)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (event_id) DO NOTHING
+             RETURNING event_id`,
+            [
+              event.event_id,
+              event.short_code,
+              clickedAt,
+              event.ip_hash || null,
+              event.user_agent || null,
+              event.referrer || null,
+            ],
+          );
+
+          if (inserted.rowCount > 0) {
+            const date = clickedAt.toISOString().slice(0, 10);
+
+            await query(
+              `INSERT INTO click_stats (short_code, date, click_count)
+               VALUES ($1, $2, 1)
+               ON CONFLICT (short_code, date)
+               DO UPDATE SET click_count = click_stats.click_count + 1`,
+              [event.short_code, date],
+            );
+          }
+
+          resolveOffset(message.offset);
+          await commitOffsetsIfNecessary();
+        } catch (err) {
+          if (
+            err.message === 'Malformed click event' ||
+            err.message === 'Invalid click event timestamp' ||
+            err instanceof SyntaxError
+          ) {
+            console.error('[Kafka Consumer] Sending malformed event to DLQ:', err.message);
+            try {
+              await sendToTopic('click-events-dlq', {
+                original_topic: batch.topic,
+                partition: batch.partition,
+                offset: message.offset,
+                value: message.value ? message.value.toString() : '',
+                error: err.message,
+              });
+              resolveOffset(message.offset);
+              await commitOffsetsIfNecessary();
+              continue;
+            } catch (dlqErr) {
+              console.error('[Kafka Consumer] Failed to write to DLQ:', dlqErr.message);
+            }
+          }
+
+          console.error('[Kafka Consumer] Failed to process message:', err.message);
+          throw err;
+        }
+
+        await heartbeat();
       }
     },
   });

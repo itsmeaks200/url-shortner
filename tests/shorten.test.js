@@ -92,9 +92,26 @@ describe("POST /shorten", () => {
     expect(res.status).toBe(400);
   });
 
+  test("400 for an alias that is too long (> 9 chars)", async () => {
+    const res = await request(app)
+      .post("/shorten")
+      .send({ url: "https://example.com", alias: "toolong123" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/alias/i);
+  });
+
+  test("400 for invalid ttl_days", async () => {
+    const res = await request(app)
+      .post("/shorten")
+      .send({ url: "https://example.com", ttl_days: "abc" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/ttl_days/i);
+  });
+
   test("409 when alias is already taken (PG unique violation)", async () => {
     const pgError = Object.assign(new Error("duplicate key"), {
       code: "23505",
+      constraint: "urls_short_code_key",
     });
     query.mockRejectedValueOnce(pgError);
 
@@ -112,25 +129,26 @@ describe("POST /shorten", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET /:code", () => {
-  test("301 redirect on cache miss — falls through to PostgreSQL", async () => {
+  test("302 redirect on cache miss — falls through to PostgreSQL", async () => {
     query.mockResolvedValueOnce({
       rows: [{ long_url: "https://example.com", expires_at: null }],
     });
 
     const res = await request(app).get("/abc123");
 
-    expect(res.status).toBe(301);
+    expect(res.status).toBe(302);
     expect(res.headers.location).toBe("https://example.com");
+    expect(res.headers["cache-control"]).toMatch(/no-store/i);
   });
 
-  test("301 redirect on cache hit — PostgreSQL is NOT queried", async () => {
+  test("302 redirect on cache hit — PostgreSQL is NOT queried", async () => {
     cache.get.mockResolvedValueOnce(
       JSON.stringify({ long_url: "https://cached.com", expires_at: null }),
     );
 
     const res = await request(app).get("/hit");
 
-    expect(res.status).toBe(301);
+    expect(res.status).toBe(302);
     expect(res.headers.location).toBe("https://cached.com");
     expect(query).not.toHaveBeenCalled();
   });

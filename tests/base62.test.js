@@ -30,21 +30,25 @@ describe('base62.encode', () => {
 });
 
 describe('base62.decode', () => {
-  test('decodes "0" to 0', () => {
-    expect(decode('0')).toBe(0);
+  test('decodes "0" to 0n', () => {
+    expect(decode('0')).toBe(0n);
   });
 
-  test('decodes "10" to 62', () => {
-    expect(decode('10')).toBe(62);
+  test('decodes "10" to 62n', () => {
+    expect(decode('10')).toBe(62n);
   });
 
-  test('decodes "Z" to 61', () => {
-    expect(decode('Z')).toBe(61);
+  test('decodes "Z" to 61n', () => {
+    expect(decode('Z')).toBe(61n);
+  });
+
+  test('rejects invalid characters', () => {
+    expect(() => decode('!!!')).toThrow('Invalid base62 character: !');
   });
 });
 
 describe('base62 roundtrip', () => {
-  const cases = [0, 1, 61, 62, 100, 9999, 123456789];
+  const cases = [0n, 1n, 61n, 62n, 100n, 9999n, 123456789n, 339411272711802881n];
 
   test.each(cases)('decode(encode(%i)) === %i', (n) => {
     expect(decode(encode(n))).toBe(n);

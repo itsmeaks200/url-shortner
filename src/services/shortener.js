@@ -6,21 +6,53 @@ const { generateId } = require("../utils/snowflake");
 const cache = require("../cache/redis");
 
 const CACHE_TTL_DEFAULT = 86400; // 24 hours in seconds
+const MAX_GENERATION_ATTEMPTS = 3;
 
 async function shortenUrl({ url, alias, ttlDays }) {
-  const id = generateId();
-  const shortCode = alias || encode(id);
   const expiresAt = ttlDays
     ? new Date(Date.now() + ttlDays * 86400 * 1000)
     : null;
 
-  await query(
-    `INSERT INTO urls (id, short_code, long_url, custom_alias, expires_at)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id.toString(), shortCode, url, alias || null, expiresAt],
-  );
+  for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
+    const id = generateId();
+    const shortCode = alias || encode(id);
 
-  return { shortCode, expiresAt };
+    try {
+      await query(
+        `INSERT INTO urls (id, short_code, long_url, custom_alias, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id.toString(), shortCode, url, alias || null, expiresAt],
+      );
+
+      return { shortCode, expiresAt };
+    } catch (err) {
+      const isUniqueViolation = err.code === '23505';
+      const isShortCodeCollision = isUniqueViolation && err.constraint === 'urls_short_code_key';
+      const isGeneratedIdCollision = isUniqueViolation && err.constraint === 'urls_pkey';
+
+      if (alias && isShortCodeCollision) {
+        throw err;
+      }
+
+      if ((isGeneratedIdCollision || (!alias && isShortCodeCollision)) && attempt < MAX_GENERATION_ATTEMPTS - 1) {
+        continue;
+      }
+
+      if (isGeneratedIdCollision || (!alias && isShortCodeCollision)) {
+        const error = new Error('Failed to allocate a unique short code');
+        error.code = 'EGENERATEID';
+        error.status = 503;
+        throw error;
+      }
+
+      throw err;
+    }
+  }
+
+  const error = new Error('Failed to allocate a unique short code');
+  error.code = 'EGENERATEID';
+  error.status = 503;
+  throw error;
 }
 
 async function resolveCode(code) {

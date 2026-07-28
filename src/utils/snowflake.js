@@ -24,6 +24,10 @@ function generateId() {
 
   let ts = now();
 
+  if (ts < lastTimestamp) {
+    throw new Error(`Clock moved backwards; refusing to generate for ${lastTimestamp - ts}ms`);
+  }
+
   if (ts === lastTimestamp) {
     sequence = (sequence + 1n) & MAX_SEQUENCE;
     // Sequence exhausted within this ms — wait for next ms

@@ -85,7 +85,7 @@ describe('GET /:code/stats', () => {
     });
 
     const res = await request(app).get('/abc123');
-    expect(res.status).toBe(301);
+      expect(res.status).toBe(302);
     expect(res.headers.location).toBe('https://example.com');
   });
 });

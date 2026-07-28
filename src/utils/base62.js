@@ -15,7 +15,18 @@ function encode(num) {
 }
 
 function decode(str) {
-  return str.split('').reduce((acc, c) => acc * 62 + CHARS.indexOf(c), 0);
+  let result = 0n;
+
+  for (const c of str) {
+    const index = CHARS.indexOf(c);
+    if (index === -1) {
+      throw new Error(`Invalid base62 character: ${c}`);
+    }
+
+    result = result * 62n + BigInt(index);
+  }
+
+  return result;
 }
 
 module.exports = { encode, decode };

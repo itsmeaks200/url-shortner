@@ -41,6 +41,17 @@ async function initSchema() {
     );
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS click_events (
+      event_id UUID PRIMARY KEY,
+      short_code VARCHAR(50) NOT NULL,
+      clicked_at TIMESTAMP NOT NULL,
+      ip_hash TEXT,
+      user_agent TEXT,
+      referrer TEXT
+    );
+  `);
+
   console.log("Database schema initialised");
 }
 

@@ -44,4 +44,15 @@ describe('snowflake.generateId', () => {
     expect(msSinceEpoch).toBeGreaterThan(nowMs - 5000n);
     expect(msSinceEpoch).toBeLessThanOrEqual(nowMs + 100n);
   });
+
+  test('throws when the clock moves backwards', () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockImplementationOnce(() => 1_704_067_200_100);
+    nowSpy.mockImplementationOnce(() => 1_704_067_200_000);
+
+    generateId();
+    expect(() => generateId()).toThrow(/clock moved backwards/i);
+
+    nowSpy.mockRestore();
+  });
 });
