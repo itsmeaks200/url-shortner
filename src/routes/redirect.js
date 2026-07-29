@@ -25,8 +25,22 @@ router.get("/:code", async (req, res, next) => {
       console.error("[Analytics] Failed to emit click event:", err.message);
     });
 
-    res.set("Cache-Control", "no-store, max-age=0");
-    return res.redirect(302, record.long_url);
+    // Smart caching: Cache up to URL TTL (or use default if no expiry)
+    // This maximizes browser cache effectiveness while respecting URL lifetime
+    const DEFAULT_CACHE_TTL = parseInt(process.env.BROWSER_CACHE_TTL || '3600', 10); // 1 hour default
+    let cacheTTL = DEFAULT_CACHE_TTL;
+    
+    if (record.expires_at) {
+      const secondsUntilExpiry = Math.floor(
+        (new Date(record.expires_at) - Date.now()) / 1000
+      );
+      // Cache for the full TTL remaining (never beyond expiry)
+      cacheTTL = Math.max(0, secondsUntilExpiry);
+    }
+
+    res.set("Cache-Control", `public, max-age=${cacheTTL}, must-revalidate`);
+    // 307 maintains HTTP method and respects Cache-Control
+    return res.redirect(307, record.long_url);
   } catch (err) {
     next(err);
   }

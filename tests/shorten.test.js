@@ -129,26 +129,27 @@ describe("POST /shorten", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET /:code", () => {
-  test("302 redirect on cache miss — falls through to PostgreSQL", async () => {
+  test("307 redirect on cache miss — falls through to PostgreSQL", async () => {
     query.mockResolvedValueOnce({
       rows: [{ long_url: "https://example.com", expires_at: null }],
     });
 
     const res = await request(app).get("/abc123");
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(307);
     expect(res.headers.location).toBe("https://example.com");
-    expect(res.headers["cache-control"]).toMatch(/no-store/i);
+    // Default cache TTL is 1 hour (3600 seconds) for non-expiring URLs
+    expect(res.headers["cache-control"]).toMatch(/public.*max-age=3600/);
   });
 
-  test("302 redirect on cache hit — PostgreSQL is NOT queried", async () => {
+  test("307 redirect on cache hit — PostgreSQL is NOT queried", async () => {
     cache.get.mockResolvedValueOnce(
       JSON.stringify({ long_url: "https://cached.com", expires_at: null }),
     );
 
     const res = await request(app).get("/hit");
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(307);
     expect(res.headers.location).toBe("https://cached.com");
     expect(query).not.toHaveBeenCalled();
   });
