@@ -8,29 +8,30 @@ A production-grade URL shortener built with Node.js, Express, PostgreSQL, Redis,
 flowchart TD
     Client([Browser / Client])
 
-    subgraph API["Express API"]
+    subgraph API[Express API]
         RL[Rate Limiter]
         SH[POST /shorten]
         RD[GET /:code]
         ST[GET /:code/stats]
     end
 
-    subgraph Cache["Redis"]
-        RC[(url:{code})]
+    subgraph Cache[Redis]
+        RC[(Cache Layer)]
     end
 
-    subgraph DB["PostgreSQL"]
+    subgraph DB[PostgreSQL]
         UT[(urls)]
         CS[(click_stats)]
     end
 
-    subgraph Pipeline["Kafka"]
+    subgraph Pipeline[Kafka]
         KP[Producer]
-        KT[[click-events]]
+        KT[click-events topic]
         KC[Consumer]
     end
 
-    Client -->|POST /shorten| RL --> SH
+    Client -->|POST /shorten| RL
+    RL --> SH
     Client -->|GET /:code| RD
     Client -->|GET /:code/stats| ST
 
@@ -40,8 +41,11 @@ flowchart TD
     RD -->|2. DB fallback| UT
     RD -->|3. cache fill| RC
     RD -.->|fire & forget| KP
-    KP --> KT --> KC -->|upsert| CS
-    ST --> UT & CS
+    KP --> KT
+    KT --> KC
+    KC -->|upsert| CS
+    ST --> UT
+    ST --> CS
 ```
 
 ## Stack
