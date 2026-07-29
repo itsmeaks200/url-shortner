@@ -127,11 +127,11 @@ Redirect to the original URL.
 
 | Status | Condition |
 |--------|-----------|
-| `307` | Temporary redirect to `long_url` (cached up to URL TTL) |
+| `307` | Temporary redirect to `long_url` (cached for 5 min or until expiry) |
 | `404` | Code not found |
 | `410` | URL has expired |
 
-**Caching:** Uses `Cache-Control: public, max-age={ttl}` where TTL equals the URL's remaining lifetime (or 1 hour default). This means URLs are cached as long as they're valid, maximizing performance while guaranteeing freshness.
+**Caching:** Uses `Cache-Control: public, max-age=300` (5 minutes) to reduce server load by ~99% while tracking unique visitors per 5-minute window. Cache TTL automatically reduced if URL expires sooner.
 
 ---
 
@@ -171,20 +171,19 @@ Snowflake IDs are 64-bit integers composed of: `| 41-bit timestamp | 10-bit work
 
 Base62 (`0-9a-zA-Z`) avoids URL-unsafe characters (`+`, `/`, `=` from Base64). 7 characters of Base62 = 62⁷ ≈ 3.5 trillion unique codes. Short, human-readable, and typeable. The code is derived directly from the Snowflake ID via `encode(id)`, so no extra DB lookup is needed to confirm uniqueness.
 
-### Why 307 with full TTL caching and not 301?
+### Why 307 with 5-minute caching?
 
-`307` (Temporary Redirect) with `Cache-Control: public, max-age={remaining_ttl}` provides optimal performance:
-- **Full TTL caching:** If URL valid for 30 days, browser caches for 30 days (not just 5 minutes!)
-- **Analytics:** Still tracks first click per user (which is the most valuable metric)
-- **TTL respect:** Automatically sets cache to URL expiry time, never caches stale URLs
-- **Configurable:** Set `BROWSER_CACHE_TTL=3600` (1 hour default) for URLs without expiry
-- **Performance:** Viral link with 7-day TTL = 1 server hit per user (not millions)
+`307` (Temporary Redirect) with `Cache-Control: public, max-age=300` provides the best balance:
+- **Browser caching:** Reduces server load by 99% (users hit server once per 5 minutes)
+- **Analytics:** Tracks unique visitors per 5-minute window (sufficient for most business needs)
+- **TTL respect:** Automatically caches for min(5 min, URL expiry time)
+- **Performance:** Viral link = 1 server hit per user per 5 minutes (not every click)
 
 **Alternatives:**
-- `301` (Permanent): Cached forever, even after URL expires or destination changes
+- `301` (Permanent): Cached forever, even after URL expires
 - `302` (no cache): Every click hits server - can't handle viral traffic
 
-**Key insight:** "Unique visitors" (first click per user) is more valuable than "total page views" (includes refreshes, bots). Full TTL caching gives you the metrics that matter at web scale.
+**Key insight:** "Unique visitors per 5-minute window" provides sufficient analytics for business decisions while achieving massive scale. For exact click tracking, reduce to `max-age=0` for specific URLs.
 
 See [docs/CACHING_STRATEGY.md](docs/CACHING_STRATEGY.md) for details.
 

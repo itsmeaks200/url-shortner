@@ -138,8 +138,8 @@ describe("GET /:code", () => {
 
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe("https://example.com");
-    // Default cache TTL is 1 hour (3600 seconds) for non-expiring URLs
-    expect(res.headers["cache-control"]).toMatch(/public.*max-age=3600/);
+    // Cache TTL is 5 minutes (300 seconds) by default
+    expect(res.headers["cache-control"]).toMatch(/public.*max-age=300/);
   });
 
   test("307 redirect on cache hit — PostgreSQL is NOT queried", async () => {
