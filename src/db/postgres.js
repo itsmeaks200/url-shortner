@@ -20,6 +20,26 @@ async function query(text, params) {
   }
 }
 
+// Runs fn(client) inside BEGIN/COMMIT on a single pooled client; rolls back on error.
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {
+      // ignore rollback failure; original error is more useful
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function initSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS urls (
@@ -55,4 +75,4 @@ async function initSchema() {
   console.log("Database schema initialised");
 }
 
-module.exports = { query, initSchema };
+module.exports = { query, withTransaction, initSchema };

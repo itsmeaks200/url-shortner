@@ -1,5 +1,4 @@
 'use strict';
-
 const { Kafka } = require('kafkajs');
 const crypto = require('crypto');
 
@@ -48,7 +47,7 @@ async function emitClickEvent(shortCode, req) {
     timestamp: new Date().toISOString(),
     ip_hash: ipHash,
     user_agent: req.headers['user-agent'] || '',
-    referrer: req.headers.referer || req.headers.referrer || '',
+    // referrer: req.headers.referer || req.headers.referrer || '', // Removed for privacy
   };
 
   await sendToTopic('click-events', event);
