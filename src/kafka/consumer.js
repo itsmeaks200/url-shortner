@@ -12,6 +12,8 @@ const kafka = new Kafka({
 
 const consumer = kafka.consumer({ groupId: 'analytics-consumers' });
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function start() {
   await consumer.connect();
 
@@ -22,7 +24,9 @@ async function start() {
   await consumer.run({
     // Manual offset commit: only advance the offset after the event is durably recorded.
     autoCommit: false,
-    eachBatch: async ({ batch, resolveOffset, commitOffsetsIfNecessary, heartbeat, isRunning, isStale }) => {
+    // Don't mark the batch resolved on return; we resolve only what we processed.
+    eachBatchAutoResolve: false,
+    eachBatch: async ({ batch, resolveOffset, heartbeat, isRunning, isStale }) => {
       // 1. Parse/validate the whole batch; malformed events go to the DLQ.
       const events = [];
       for (const message of batch.messages) {
@@ -31,9 +35,17 @@ async function start() {
         }
 
         try {
-          const event = JSON.parse(message.value.toString());
+          // A null value (tombstone) becomes '' so JSON.parse throws SyntaxError -> DLQ.
+          const event = JSON.parse(message.value ? message.value.toString() : '');
 
-          if (!event.event_id || !event.short_code || !event.timestamp) {
+          // Check validity, not just presence: a bad UUID or over-long code would
+          // fail the whole transaction and wedge the partition.
+          if (
+            !event ||
+            typeof event.event_id !== 'string' || !UUID_RE.test(event.event_id) ||
+            typeof event.short_code !== 'string' || event.short_code.length > 12 ||
+            !event.timestamp
+          ) {
             throw new Error('Malformed click event');
           }
 
@@ -89,10 +101,12 @@ async function start() {
             ],
           );
 
-          const insertedIds = new Set(inserted.rows.map((r) => r.event_id));
+          // delete() is true only the first time, so a duplicate inside one batch
+          // is counted once.
+          const fresh = new Set(inserted.rows.map((r) => r.event_id));
           const counts = new Map();
           for (const e of events) {
-            if (!insertedIds.has(e.event_id)) continue;
+            if (!fresh.delete(e.event_id)) continue;
             const date = e.clickedAt.toISOString().slice(0, 10);
             const key = `${e.short_code}\u0000${date}`;
             const entry = counts.get(key);
@@ -121,8 +135,17 @@ async function start() {
 
       // 3. One offset resolve + commit for the whole batch.
       if (batch.messages.length > 0) {
-        resolveOffset(batch.messages[batch.messages.length - 1].offset);
-        await commitOffsetsIfNecessary();
+        // commitOffsetsIfNecessary() is a no-op without autoCommitInterval/Threshold,
+        // so commit explicitly. Kafka stores the NEXT offset to read.
+        const last = batch.messages[batch.messages.length - 1].offset;
+        resolveOffset(last);
+        await consumer.commitOffsets([
+          {
+            topic: batch.topic,
+            partition: batch.partition,
+            offset: (BigInt(last) + 1n).toString(),
+          },
+        ]);
       }
       await heartbeat();
     },

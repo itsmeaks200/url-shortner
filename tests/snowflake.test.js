@@ -56,3 +56,21 @@ describe('snowflake.generateId', () => {
     nowSpy.mockRestore();
   });
 });
+
+describe('WORKER_ID validation', () => {
+  afterEach(() => { process.env.WORKER_ID = '1'; jest.resetModules(); });
+
+  test.each(['1025', 'abc', '-1', '1.5'])('rejects %s at load', (bad) => {
+    process.env.WORKER_ID = bad;
+    jest.resetModules();
+    expect(() => require('../src/utils/snowflake')).toThrow(/WORKER_ID/);
+  });
+
+  test('accepts the boundaries 0 and 1023', () => {
+    for (const ok of ['0', '1023']) {
+      process.env.WORKER_ID = ok;
+      jest.resetModules();
+      expect(() => require('../src/utils/snowflake')).not.toThrow();
+    }
+  });
+});

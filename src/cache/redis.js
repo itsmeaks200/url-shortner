@@ -10,6 +10,9 @@ const client = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   lazyConnect: false,       // connect immediately on module load
   enableOfflineQueue: true, // buffer commands until the connection is ready
   maxRetriesPerRequest: 1,
+  // Without this, commands wait in the offline queue through reconnect backoff
+  // (~4s per request during an outage). Fail fast and fall back to PostgreSQL.
+  commandTimeout: 100,
 });
 
 client.on('error', (err) => {

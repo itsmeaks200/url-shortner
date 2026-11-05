@@ -19,9 +19,20 @@ function now() {
   return BigInt(Date.now()) - EPOCH;
 }
 
-function generateId() {
-  const workerId = BigInt(process.env.WORKER_ID || 1) & ((1n << WORKER_ID_BITS) - 1n);
+// Validated once at load so a bad config fails at boot, not per request, and an
+// out-of-range value is never silently masked into another worker's ID.
+function loadWorkerId() {
+  const raw = process.env.WORKER_ID;
+  if (raw === undefined || raw === '') return 1n;
+  if (!/^\d+$/.test(raw) || Number(raw) > 1023) {
+    throw new Error(`WORKER_ID must be an integer 0-1023, got "${raw}"`);
+  }
+  return BigInt(raw);
+}
 
+const workerId = loadWorkerId();
+
+function generateId() {
   let ts = now();
 
   if (ts < lastTimestamp) {

@@ -171,3 +171,88 @@ describe("GET /:code", () => {
     expect(res.status).toBe(410);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hardening
+// ---------------------------------------------------------------------------
+
+describe("input hardening", () => {
+  test("400 when url is an array", async () => {
+    const res = await request(app).post("/shorten").send({ url: ["https://a.com"] });
+    expect(res.status).toBe(400);
+  });
+
+  test("400 when alias is an array", async () => {
+    const res = await request(app).post("/shorten").send({ url: "https://a.com", alias: ["abc"] });
+    expect(res.status).toBe(400);
+  });
+
+  test("400 for a reserved alias", async () => {
+    const res = await request(app).post("/shorten").send({ url: "https://a.com", alias: "shorten" });
+    expect(res.status).toBe(400);
+  });
+
+  test("400 for an over-long URL", async () => {
+    const res = await request(app).post("/shorten").send({ url: "https://a.com/" + "x".repeat(3000) });
+    expect(res.status).toBe(400);
+  });
+
+  test("400 for URLs with embedded credentials", async () => {
+    const res = await request(app).post("/shorten").send({ url: "https://user:pw@a.com" });
+    expect(res.status).toBe(400);
+  });
+
+  test("stores the normalised URL", async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await request(app).post("/shorten").send({ url: "https://exa\nmple.com/a b" });
+    expect(query.mock.calls[0][1][2]).toBe("https://example.com/a%20b");
+  });
+
+  test("malformed JSON is a 400, not a 500", async () => {
+    const res = await request(app)
+      .post("/shorten")
+      .set("Content-Type", "application/json")
+      .send("{bad json");
+    expect(res.status).toBe(400);
+  });
+
+  test("oversized body is a 413", async () => {
+    const res = await request(app).post("/shorten").send({ url: "https://a.com/" + "x".repeat(120 * 1024) });
+    expect(res.status).toBe(413);
+  });
+
+  test("malformed percent-encoding is a 400", async () => {
+    const res = await request(app).get("/%E0%A4%A");
+    expect(res.status).toBe(400);
+  });
+
+  test("503 from the service is preserved", async () => {
+    query.mockRejectedValue(Object.assign(new Error("dup"), { code: "23505", constraint: "urls_pkey" }));
+    const res = await request(app).post("/shorten").send({ url: "https://a.com" });
+    expect(res.status).toBe(503);
+    query.mockReset();
+  });
+});
+
+describe("redirect hardening", () => {
+  test("impossible codes 404 without touching Redis or PostgreSQL", async () => {
+    const res = await request(app).get("/favicon.ico");
+    expect(res.status).toBe(404);
+    expect(query).not.toHaveBeenCalled();
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  test("a corrupt cache entry is treated as a miss", async () => {
+    cache.get.mockResolvedValueOnce("{not json");
+    query.mockResolvedValueOnce({ rows: [{ long_url: "https://example.com", expires_at: null }] });
+    const res = await request(app).get("/abc123");
+    expect(res.status).toBe(307);
+    expect(cache.del).toHaveBeenCalledWith("url:abc123");
+  });
+
+  test("HEAD redirects do not emit click events", async () => {
+    query.mockResolvedValueOnce({ rows: [{ long_url: "https://example.com", expires_at: null }] });
+    await request(app).head("/abc123");
+    expect(require("../src/kafka/producer").emitClickEvent).not.toHaveBeenCalled();
+  });
+});

@@ -1,6 +1,6 @@
 # Distributed URL Shortener
 
-A production-grade URL shortener built with Node.js, Express, PostgreSQL, Redis, and Kafka. 
+A learning-project URL shortener with production-style components built with Node.js, Express, PostgreSQL, Redis, and Kafka. 
 
 ## Architecture
 
@@ -8,7 +8,7 @@ A production-grade URL shortener built with Node.js, Express, PostgreSQL, Redis,
 flowchart TD
     Client([Browser / Client])
 
-    subgraph API[Express API]
+    subgraph API[Express API instance x2]
         RL[Rate Limiter]
         SH[POST /shorten]
         RD[GET /:code]
@@ -30,10 +30,12 @@ flowchart TD
         KC[Consumer]
     end
 
-    Client -->|POST /shorten| RL
+    Client -->|HTTP :80| NX[Nginx]
+    NX -->|round-robin request| APP[Express app]
+    APP --> RL
     RL --> SH
-    Client -->|GET /:code| RD
-    Client -->|GET /:code/stats| ST
+    APP --> RD
+    APP --> ST
 
     SH -->|Snowflake ID + Base62| UT
     RD -->|1. cache lookup| RC
@@ -54,11 +56,12 @@ flowchart TD
 |-------|-----------|-----|
 | API | Node.js + Express | Fast, non-blocking I/O |
 | Database | PostgreSQL 15 | Durable, ACID, indexed |
-| Cache | Redis 7 | Sub-millisecond redirects |
+| Cache | Redis 7 | Fast cache lookups (not load tested) |
 | ID generation | Snowflake (custom) | Time-ordered, no coordination |
 | URL encoding | Base62 | URL-safe, short, human-readable |
 | Analytics | Kafka + KafkaJS | Decouples analytics from redirect critical path |
-| Container | Docker Compose | Zero-cost local dev, one command setup |
+| Edge / load balancer | Nginx | Round-robins traffic across two API instances |
+| Container | Docker Compose | Local multi-service setup with two API instances |
 
 ## Running locally
 
@@ -70,9 +73,9 @@ cd url-shortener
 docker compose up --build
 ```
 
-The app is available at `http://localhost:3000`. All services (Postgres, Redis, Zookeeper, Kafka) start automatically. The database schema is created on first boot.
+The public app is available at `http://localhost` (port 80). Nginx round-robins requests between two Express instances. PostgreSQL, Redis, ZooKeeper, and Kafka also start automatically; the database schema is created on boot.
 
-> **Note:** Kafka takes ~20–30 seconds to become ready after `docker compose up`. The server starts and handles HTTP traffic immediately; the analytics consumer reconnects automatically once Kafka is ready.
+> **Note:** Kafka can take ~20–30 seconds to become ready after `docker compose up`. Each API instance starts serving HTTP after PostgreSQL is ready; if Kafka is not ready yet the consumer retries with backoff until it connects.
 
 ### Run tests (no Docker required)
 
@@ -81,7 +84,7 @@ npm install
 npm test
 ```
 
-35 tests across 4 suites. All infrastructure (Postgres, Redis, Kafka) is mocked — tests run in ~1–4 seconds.
+64 tests across 5 suites. All infrastructure (Postgres, Redis, Kafka) is mocked.
 
 ## API Reference
 
@@ -105,7 +108,7 @@ Content-Type: application/json
 **201 Created**
 ```json
 {
-  "short_url": "http://localhost:3000/abc123",
+  "short_url": "http://localhost/abc123",
   "short_code": "abc123",
   "expires_at": "2025-07-01T00:00:00.000Z"
 }
@@ -131,7 +134,7 @@ Redirect to the original URL.
 | `404` | Code not found |
 | `410` | URL has expired |
 
-**Caching:** Uses `Cache-Control: public, max-age=300` (5 minutes) to reduce server load by ~99% while tracking unique visitors per 5-minute window. Cache TTL automatically reduced if URL expires sooner.
+**Caching:** Uses `Cache-Control: public, max-age=300` (5 minutes) to avoid repeat requests from the same browser (savings not measured); clicks served from a browser cache are not counted. Cache TTL automatically reduced if URL expires sooner.
 
 ---
 
@@ -169,21 +172,21 @@ Snowflake IDs are 64-bit integers composed of: `| 41-bit timestamp | 10-bit work
 
 ### Why Base62 and not UUID strings as short codes?
 
-Base62 (`0-9a-zA-Z`) avoids URL-unsafe characters (`+`, `/`, `=` from Base64). 7 characters of Base62 = 62⁷ ≈ 3.5 trillion unique codes. Short, human-readable, and typeable. The code is derived directly from the Snowflake ID via `encode(id)`, so no extra DB lookup is needed to confirm uniqueness.
+Base62 (`0-9a-zA-Z`) avoids URL-unsafe characters (`+`, `/`, `=` from Base64). Generated codes are currently 10 characters (11 from 2030) because the Snowflake timestamp occupies the high bits; custom aliases are 3-9 characters so the two never overlap. Short, human-readable, and typeable. The code is derived directly from the Snowflake ID via `encode(id)`, so no extra DB lookup is needed to confirm uniqueness.
 
 ### Why 307 with 5-minute caching?
 
 `307` (Temporary Redirect) with `Cache-Control: public, max-age=300` provides the best balance:
-- **Browser caching:** Reduces server load by 99% (users hit server once per 5 minutes)
-- **Analytics:** Tracks unique visitors per 5-minute window (sufficient for most business needs)
+- **Browser caching:** Repeat clicks from the same browser within 5 minutes never reach the server (savings not measured)
+- **Analytics:** Counts requests that reach the service; cached repeat clicks within the window are not counted
 - **TTL respect:** Automatically caches for min(5 min, URL expiry time)
-- **Performance:** Viral link = 1 server hit per user per 5 minutes (not every click)
+- **Performance:** Each new visitor to a viral link still hits the origin once; only repeat clicks are saved
 
 **Alternatives:**
 - `301` (Permanent): Cached forever, even after URL expires
 - `302` (no cache): Every click hits server - can't handle viral traffic
 
-**Key insight:** "Unique visitors per 5-minute window" provides sufficient analytics for business decisions while achieving massive scale. For exact click tracking, reduce to `max-age=0` for specific URLs.
+**Key insight:** The cache window is a dial between origin load and analytics accuracy. For exact click tracking, use `no-store` (or `max-age=0`) for specific URLs.
 
 See [docs/CACHING_STRATEGY.md](docs/CACHING_STRATEGY.md) for details.
 
@@ -193,7 +196,7 @@ Write-through caches every URL on creation, even ones never clicked. Cache-aside
 
 ### Why Kafka instead of writing analytics directly to PostgreSQL on each redirect?
 
-A synchronous DB write on the redirect path adds latency to every click. At 10,000 redirects/sec, that's 10,000 concurrent DB writes — the pool saturates quickly. Kafka decouples it: the redirect returns in <5ms, the consumer aggregates clicks at its own pace. The consumer can lag without affecting user-facing latency. Additionally, raw events are stored in `click_events` table with UUID-based deduplication, providing exactly-once click counting semantics.
+A synchronous DB write on the redirect path adds latency to every click. At 10,000 redirects/sec, that's 10,000 concurrent DB writes — the pool saturates quickly. Kafka decouples it: the redirect does not wait on the write, the consumer aggregates clicks at its own pace. The consumer can lag without affecting user-facing latency. Raw events are stored in `click_events` with UUID-based deduplication, so at-least-once Kafka delivery does not double-count successfully persisted events.
 
 ### What breaks at 10x load and how to fix it?
 
@@ -201,7 +204,7 @@ A synchronous DB write on the redirect path adds latency to every click. At 10,0
 |-----------|------------------|-----|
 | PostgreSQL writes | Connection pool exhaustion | PgBouncer connection pooler + read replicas |
 | Redis | Hot key (one viral URL) | Per-process LRU cache (L1) in front of Redis |
-| Single Express | CPU-bound JSON + routing | Horizontal scaling behind a load balancer |
+| API instances | CPU-bound JSON + routing | Add replicas behind Nginx with unique `WORKER_ID`s |
 | Kafka consumer | Slow aggregation lag | More partitions + more consumer instances (same `groupId`) |
 
 ## Project structure
@@ -236,7 +239,8 @@ url-shortener/
 │   ├── snowflake.test.js
 │   ├── shorten.test.js
 │   └── stats.test.js
-├── docker-compose.yml
+├── nginx.conf                  # Nginx load balancer configuration
+├── docker-compose.yml          # Nginx + two app replicas + infrastructure
 ├── Dockerfile
 └── .env.example
 ```

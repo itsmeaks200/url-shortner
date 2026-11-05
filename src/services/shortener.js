@@ -19,9 +19,9 @@ async function shortenUrl({ url, alias, ttlDays }) {
 
     try {
       await query(
-        `INSERT INTO urls (id, short_code, long_url, custom_alias, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id.toString(), shortCode, url, alias || null, expiresAt],
+        `INSERT INTO urls (id, short_code, long_url, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [id.toString(), shortCode, url, expiresAt],
       );
 
       return { shortCode, expiresAt };
@@ -61,7 +61,13 @@ async function resolveCode(code) {
   // 1. Check Redis cache first
   const cached = await cache.get(cacheKey);
   if (cached) {
-    return JSON.parse(cached);
+    try {
+      return JSON.parse(cached);
+    } catch {
+      // Corrupt entry: treat as a miss and drop it so it can't 500 until TTL.
+      console.error(`[Cache] Corrupt value for ${cacheKey}; evicting`);
+      await cache.del(cacheKey);
+    }
   }
 
   // 2. Cache miss — query PostgreSQL

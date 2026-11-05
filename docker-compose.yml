@@ -1,23 +1,48 @@
+x-app: &app
+  build: .
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+    kafka:
+      condition: service_started
+  restart: unless-stopped
+  # Node as PID 1 ignores SIGTERM without a handler; a tiny init also reaps zombies.
+  init: true
+
+x-app-env: &app-env
+  PORT: 3000
+  POSTGRES_URL: postgres://user:password@postgres:5432/urlshortener
+  REDIS_URL: redis://redis:6379
+  KAFKA_BROKER: kafka:9092
+  BASE_URL: http://localhost
+
 services:
-  app:
-    build: .
+  nginx:
+    image: nginx:1.27-alpine
     ports:
-      - "3000:3000"
-    environment:
-      PORT: 3000
-      POSTGRES_URL: postgres://user:password@postgres:5432/urlshortener
-      REDIS_URL: redis://redis:6379
-      KAFKA_BROKER: kafka:9092
-      BASE_URL: http://localhost:3000
-      WORKER_ID: 1
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      kafka:
-        condition: service_started
+      - app1
+      - app2
     restart: unless-stopped
+
+  # Each instance needs a unique WORKER_ID so Snowflake IDs never collide,
+  # so these are defined separately rather than using `--scale`.
+  app1:
+    <<: *app
+    environment:
+      <<: *app-env
+      WORKER_ID: 1
+
+  app2:
+    <<: *app
+    environment:
+      <<: *app-env
+      WORKER_ID: 2
 
   postgres:
     image: postgres:15
@@ -58,6 +83,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # 2 partitions so both app instances' consumers get work
+      KAFKA_NUM_PARTITIONS: 2
 
 volumes:
   postgres_data:

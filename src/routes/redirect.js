@@ -6,9 +6,16 @@ const producer = require("../kafka/producer");
 
 const router = express.Router();
 
+// Generated codes are Base62 and aliases are [a-zA-Z0-9-]; both fit VARCHAR(12).
+const CODE_RE = /^[a-zA-Z0-9-]{1,12}$/;
+
 router.get("/:code", async (req, res, next) => {
   try {
     const { code } = req.params;
+    // Reject impossible codes (e.g. /favicon.ico) before any Redis/DB work.
+    if (!CODE_RE.test(code)) {
+      return res.status(404).json({ error: "Short URL not found" });
+    }
     const record = await resolveCode(code);
 
     if (!record) {
@@ -21,9 +28,12 @@ router.get("/:code", async (req, res, next) => {
 
     // Fire-and-forget: emit click event without blocking the redirect.
     // A Kafka failure must never affect redirect latency or reliability.
-    producer.emitClickEvent(code, req).catch((err) => {
-      console.error("[Analytics] Failed to emit click event:", err.message);
-    });
+    // HEAD requests (link previewers, health probes) are not clicks.
+    if (req.method !== "HEAD") {
+      producer.emitClickEvent(code, req).catch((err) => {
+        console.error("[Analytics] Failed to emit click event:", err.message);
+      });
+    }
 
     // Smart caching: Cache for 5 minutes (or until expiry if sooner)
     // This balances server load reduction with analytics granularity

@@ -5,30 +5,43 @@ const { shortenUrl } = require('../services/shortener');
 
 const router = express.Router();
 
-// Validate URL format
-function isValidUrl(str) {
+const MAX_URL_LENGTH = 2048;
+// Aliases that would collide with routes or look official.
+const RESERVED_ALIASES = new Set(['shorten', 'stats', 'api', 'admin', 'health', 'static']);
+
+// Returns the normalised URL (what we store), or null if invalid.
+// typeof check first: new URL() and RegExp.test() coerce arrays to strings.
+function parseUrl(str) {
+  if (typeof str !== 'string' || str.length > MAX_URL_LENGTH) return null;
   try {
     const u = new URL(str);
-    return u.protocol === 'http:' || u.protocol === 'https:';
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (u.username || u.password) return null;
+    return u.href;
   } catch {
-    return false;
+    return null;
   }
 }
 
 // Validate custom alias: reserve generated-code space by capping aliases below 10 chars.
 function isValidAlias(str) {
-  return /^[a-zA-Z0-9-]{3,9}$/.test(str);
+  return (
+    typeof str === 'string' &&
+    /^[a-zA-Z0-9-]{3,9}$/.test(str) &&
+    !RESERVED_ALIASES.has(str.toLowerCase())
+  );
 }
 
 router.post('/', async (req, res, next) => {
   try {
     const { url, alias, ttl_days: ttlDays } = req.body;
 
-    if (!url || !isValidUrl(url)) {
+    const normalisedUrl = parseUrl(url);
+    if (!normalisedUrl) {
       return res.status(400).json({ error: 'Invalid URL format' });
     }
 
-    if (alias && !isValidAlias(alias)) {
+    if (alias !== undefined && alias !== null && alias !== '' && !isValidAlias(alias)) {
       return res.status(400).json({
         error: 'Alias must be 3–9 characters: letters, numbers, or hyphens only',
       });
@@ -42,7 +55,11 @@ router.post('/', async (req, res, next) => {
       }
     }
 
-    const { shortCode, expiresAt } = await shortenUrl({ url, alias, ttlDays });
+    const { shortCode, expiresAt } = await shortenUrl({
+      url: normalisedUrl,
+      alias: alias || undefined,
+      ttlDays,
+    });
     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
 
     return res.status(201).json({
