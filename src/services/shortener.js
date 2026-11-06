@@ -97,4 +97,15 @@ async function resolveCode(code) {
   return row;
 }
 
-module.exports = { shortenUrl, resolveCode };
+async function deleteUrl(code) {
+  // Evict from cache first so in-flight reads don't serve a stale entry
+  // after the DB row is gone.
+  await cache.del(`url:${code}`);
+  const result = await query(
+    `DELETE FROM urls WHERE short_code = $1`,
+    [code],
+  );
+  return result.rowCount > 0; // false = short code didn't exist
+}
+
+module.exports = { shortenUrl, resolveCode, deleteUrl };

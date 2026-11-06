@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { shortenUrl } = require('../services/shortener');
+const { shortenUrl, deleteUrl } = require('../services/shortener');
 
 const router = express.Router();
 
@@ -72,6 +72,18 @@ router.post('/', async (req, res, next) => {
     if (err.code === '23505' && err.constraint === 'urls_short_code_key') {
       return res.status(409).json({ error: 'Alias already taken' });
     }
+    next(err);
+  }
+});
+
+router.delete('/:code', async (req, res, next) => {
+  try {
+    const deleted = await deleteUrl(req.params.code);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Short URL not found' });
+    }
+    return res.status(204).send();
+  } catch (err) {
     next(err);
   }
 });
