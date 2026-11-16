@@ -47,7 +47,7 @@ async function emitClickEvent(shortCode, req) {
     timestamp: new Date().toISOString(),
     ip_hash: ipHash,
     user_agent: req.headers['user-agent'] || '',
-    // referrer: req.headers.referer || req.headers.referrer || '', // Removed for privacy
+    referrer: req.headers.referer || req.headers.referrer || '',
   };
 
   await sendToTopic('click-events', event);
