@@ -11,6 +11,7 @@ flowchart TD
     subgraph API[Express API instance x2]
         RL[Rate Limiter]
         SH[POST /shorten]
+        DL[DELETE /shorten/:code]
         RD[GET /:code]
         ST[GET /:code/stats]
     end
@@ -21,19 +22,21 @@ flowchart TD
 
     subgraph DB[PostgreSQL]
         UT[(urls)]
+        CE[(click_events)]
         CS[(click_stats)]
     end
 
     subgraph Pipeline[Kafka]
         KP[Producer]
         KT[click-events topic]
-        KC[Consumer]
+        KC[Consumer worker]
     end
 
     Client -->|HTTP :80| NX[Nginx]
     NX -->|round-robin request| APP[Express app]
     APP --> RL
     RL --> SH
+    APP --> DL
     APP --> RD
     APP --> ST
 
@@ -45,7 +48,8 @@ flowchart TD
     RD -.->|fire & forget| KP
     KP --> KT
     KT --> KC
-    KC -->|upsert| CS
+    KC -->|raw events| CE
+    KC -->|daily upsert| CS
     ST --> UT
     ST --> CS
 ```
@@ -57,11 +61,11 @@ flowchart TD
 | API | Node.js + Express | Fast, non-blocking I/O |
 | Database | PostgreSQL 15 | Durable, ACID, indexed |
 | Cache | Redis 7 | Fast cache lookups (not load tested) |
-| ID generation | Snowflake (custom) | Time-ordered, no coordination |
+| ID generation | Snowflake (custom) | Time-ordered, no per-request coordination |
 | URL encoding | Base62 | URL-safe, short, human-readable |
 | Analytics | Kafka + KafkaJS | Decouples analytics from redirect critical path |
 | Edge / load balancer | Nginx | Round-robins traffic across two API instances |
-| Container | Docker Compose | Local multi-service setup with two API instances |
+| Container | Docker Compose | Local multi-service setup with two API instances and an independently scalable analytics worker |
 
 ## Running locally
 
@@ -73,9 +77,9 @@ cd url-shortener
 docker compose up --build
 ```
 
-The public app is available at `http://localhost` (port 80). Nginx round-robins requests between two Express instances. PostgreSQL, Redis, ZooKeeper, and Kafka also start automatically; the database schema is created on boot.
+The public app is available at `http://localhost` (port 80). Nginx round-robins requests between two Express instances. PostgreSQL, Redis, ZooKeeper, Kafka, and a separate analytics-consumer worker also start automatically; the database schema is created on boot.
 
-> **Note:** Kafka can take ~20–30 seconds to become ready after `docker compose up`. Each API instance starts serving HTTP after PostgreSQL is ready; if Kafka is not ready yet the consumer retries with backoff until it connects.
+> **Note:** Kafka can take ~20–30 seconds to become ready after `docker compose up`. Each API instance starts serving HTTP after PostgreSQL is ready. The separate `consumer` service retries Kafka startup with exponential backoff and jitter until it connects, without affecting HTTP availability.
 
 ### Run tests (no Docker required)
 
@@ -121,6 +125,20 @@ Content-Type: application/json
 | `400` | Invalid URL or alias format |
 | `409` | Custom alias already taken |
 | `429` | Rate limit exceeded |
+| `503` | Could not allocate a unique short code after 3 attempts |
+
+---
+
+### `DELETE /shorten/:code`
+
+Permanently delete a short URL mapping.
+
+| Status | Condition |
+|--------|-----------|
+| `204` | Mapping deleted (no response body) |
+| `404` | Code not found |
+
+The endpoint evicts the Redis mapping and deletes the row from `urls`. It does not delete raw or aggregated analytics rows, because the schema deliberately has no foreign keys. A browser that previously cached a `307` redirect can still follow that cached redirect for up to five minutes.
 
 ---
 
@@ -168,7 +186,7 @@ Retrieve click analytics for a short URL.
 
 UUIDs are random — every `INSERT` lands at a random position in the B-tree index, causing page splits and cache misses at scale. Auto-increment requires a sequence lock that doesn't work across multiple processes without coordination.
 
-Snowflake IDs are 64-bit integers composed of: `| 41-bit timestamp | 10-bit worker ID | 12-bit sequence |`. They are monotonically increasing, so new rows always append to the end of the index. Worker ID (set via `WORKER_ID` env var) ensures uniqueness across instances without coordination. 4,096 IDs/ms/worker ≈ 4 million IDs/sec/worker.
+Snowflake IDs are 64-bit integers composed of: `| 41-bit timestamp | 10-bit worker ID | 12-bit sequence |`. They are time-ordered, so inserts into the primary-key index land on its right edge. The unique `short_code` index is not append-only: Base62 strings do not sort in numeric order under the database collation. The worker ID (set via `WORKER_ID`) keeps IDs unique across instances without per-request coordination, but each instance must be given a distinct value by hand (Compose sets 1 and 2). 4,096 IDs/ms/worker ≈ 4 million IDs/sec/worker in theory; the Node service has not been benchmarked at that rate.
 
 ### Why Base62 and not UUID strings as short codes?
 
@@ -183,8 +201,8 @@ Base62 (`0-9a-zA-Z`) avoids URL-unsafe characters (`+`, `/`, `=` from Base64). G
 - **Performance:** Each new visitor to a viral link still hits the origin once; only repeat clicks are saved
 
 **Alternatives:**
-- `301` (Permanent): Cached forever, even after URL expires
-- `302` (no cache): Every click hits server - can't handle viral traffic
+- `301` (Permanent): cacheable by default, so a client may keep it for a long time. That conflicts with expiry and deletion and hides repeat clicks from analytics
+- `302` (Found): the status code does not decide caching, headers do. Without `Cache-Control` most clients re-request, so clicks are counted but every repeat visit reaches the origin
 
 **Key insight:** The cache window is a dial between origin load and analytics accuracy. For exact click tracking, use `no-store` (or `max-age=0`) for specific URLs.
 
@@ -225,22 +243,25 @@ url-shortener/
 │   ├── cache/
 │   │   └── redis.js          # ioredis client + helpers
 │   ├── db/
-│   │   └── postgres.js       # pg pool + initSchema
+│   │   ├── postgres.js       # pg pool + transactions + initSchema
+│   │   └── init.js           # one-off schema init script
 │   ├── kafka/
 │   │   ├── producer.js       # click event emitter
 │   │   └── consumer.js       # click event aggregator
+│   ├── worker.js             # standalone Kafka consumer process
 │   └── middleware/
 │       ├── rateLimiter.js    # express-rate-limit + Redis store
-│       └── errorHandler.js   # global 500 handler
+│       └── errorHandler.js   # global error handler (honours err.status)
 ├── frontend/
 │   └── index.html            # minimal UI
 ├── tests/
 │   ├── base62.test.js
 │   ├── snowflake.test.js
 │   ├── shorten.test.js
-│   └── stats.test.js
+│   ├── stats.test.js
+│   └── consumer.test.js
 ├── nginx.conf                  # Nginx load balancer configuration
-├── docker-compose.yml          # Nginx + two app replicas + infrastructure
+├── docker-compose.yml          # Nginx + two app replicas + consumer worker + infrastructure
 ├── Dockerfile
 └── .env.example
 ```

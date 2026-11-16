@@ -17,6 +17,9 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379
   KAFKA_BROKER: kafka:9092
   BASE_URL: http://localhost
+  # Connection budget: keep (apps x this) + (consumers x consumer value) < ~90,
+  # Postgres' default max_connections is 100.
+  PG_POOL_MAX: 10
 
 services:
   nginx:
@@ -43,6 +46,17 @@ services:
     environment:
       <<: *app-env
       WORKER_ID: 2
+
+  # Kafka click-event consumer, run separately from the HTTP app. Scale with
+  #   docker compose up -d --scale consumer=N
+  # Useful N is capped by the partition count of the click-events topic.
+  consumer:
+    <<: *app
+    command: ["node", "src/worker.js"]
+    environment:
+      <<: *app-env
+      # One batch at a time per consumer, so it needs very few connections.
+      PG_POOL_MAX: 2
 
   postgres:
     image: postgres:15
@@ -83,8 +97,10 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      # 2 partitions so both app instances' consumers get work
-      KAFKA_NUM_PARTITIONS: 2
+      # Max parallelism for the consumer group: consumers beyond this count sit idle.
+      # Only applies to topics created after this setting; recreate the volume/topic
+      # (or use kafka-topics --alter) for an existing click-events topic.
+      KAFKA_NUM_PARTITIONS: 6
 
 volumes:
   postgres_data:

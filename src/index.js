@@ -48,35 +48,19 @@ if (require.main === module) {
         console.log(`URL Shortener running on port ${PORT}`);
       });
 
-      // Start the Kafka consumer in the background, retrying with backoff + jitter:
-      // Kafka often isn't ready when the app boots, and an outage must not stop HTTP.
-      const consumer = require("./kafka/consumer");
-      let stopping = false;
-      (async () => {
-        for (let attempt = 0; !stopping; attempt++) {
-          try {
-            await consumer.start();
-            return;
-          } catch (err) {
-            const delay = Math.random() * Math.min(30000, 1000 * 2 ** attempt);
-            console.error(`[Kafka] Consumer failed to start (retry in ${Math.round(delay)}ms):`, err.message);
-            await new Promise((r) => setTimeout(r, delay));
-          }
-        }
-      })();
+      // The Kafka consumer runs as a separate process (src/worker.js).
 
-      // Graceful shutdown: stop taking requests, leave the consumer group cleanly so
-      // partitions move immediately, flush the producer, then close Redis.
+      // Graceful shutdown: stop taking requests, flush the producer, close Redis
+      // and the DB pool.
       const shutdown = async () => {
-        stopping = true;
         const force = setTimeout(() => process.exit(1), 8000);
         force.unref();
         server.close();
         await Promise.allSettled([
-          consumer.stop(),
           require("./kafka/producer").disconnect(),
           require("./cache/redis").client.quit(),
         ]);
+        await Promise.allSettled([require("./db/postgres").closePool()]);
         process.exit(0);
       };
       process.on("SIGTERM", shutdown);

@@ -2,8 +2,15 @@
 
 const { Pool } = require("pg");
 
+// Budget: (app instances x app PG_POOL_MAX) + (consumers x consumer PG_POOL_MAX)
+// must stay under Postgres max_connections (default 100), leaving some headroom.
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
+  max: parseInt(process.env.PG_POOL_MAX, 10) || 10,
+  // Fail instead of waiting forever when the pool is exhausted; a hung acquire in the
+  // consumer would stall heartbeats and trigger a rebalance.
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
 });
 
 pool.on("error", (err) => {
@@ -81,4 +88,8 @@ async function initSchema() {
   console.log("Database schema initialised");
 }
 
-module.exports = { query, withTransaction, initSchema };
+async function closePool() {
+  await pool.end();
+}
+
+module.exports = { query, withTransaction, initSchema, closePool };
